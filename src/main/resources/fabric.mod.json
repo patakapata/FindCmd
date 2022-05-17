@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "findcmd",
+  "version": "${version}",
+  
+  "name": "Find Cmd",
+  "description": "Search a command in nearby command blocks with regex filtering.",
+  "authors": [
+    "_theBooooSS"
+  ],
+  "contact": {},
+  
+  "license": "MIT",
+  "icon": "assets/findcmd/icon.png",
+  
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "me.patakapata.findcmd.client.FindCmdClient"
+    ]
+  },
+  
+  "mixins": [
+    "find-cmd.mixins.json"
+  ],
+  
+  "depends": {
+    "fabricloader": "*",
+    "fabric": "*",
+    "minecraft": "*"
+  }
+}

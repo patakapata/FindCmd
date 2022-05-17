@@ -1,0 +1,526 @@
+package me.patakapata.findcmd.client;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.hud.ChatHud;
+import net.minecraft.client.render.*;
+import net.minecraft.client.util.GlAllocationUtils;
+import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.*;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL43;
+
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Random;
+import java.util.Set;
+
+import static me.patakapata.findcmd.client.FindCmdClient.LOGGER;
+
+public class BlockHighlighter {
+    private static final BlockHighlighter INSTANCE = new BlockHighlighter();
+    private static final Random RAND = new Random();
+
+    private final Identifier TEXTURE = new Identifier("findcmd", "textures/misc/overlay.png");
+    private int TEXTURE_ID;
+    private final Set<Entry> highlightEntries = new HashSet<>();
+    private final int bufferRoundSize = 1024;
+    private ByteBuffer buffer = GlAllocationUtils.allocateByteBuffer(bufferRoundSize);
+    private final FloatBuffer PROJ_MAT_BUFF = GlAllocationUtils.allocateByteBuffer(4 * 4 * 4).asFloatBuffer();
+    private final FloatBuffer MV_MAT_BUFF = GlAllocationUtils.allocateByteBuffer(4 * 4 * 4).asFloatBuffer();
+
+    private final int BYTE_SIZE = Byte.SIZE;
+    private final int INT_SIZE = Integer.SIZE / BYTE_SIZE;
+    private final int SHORT_SIZE = Short.SIZE / BYTE_SIZE;
+    private final int FLOAT_SIZE = Float.SIZE / BYTE_SIZE;
+
+    private boolean bufferSizeChanged = false;
+    private boolean entryChanged = false;
+    private int vertices = 0;
+    private int vbo;
+    private int vao;
+    private int texUniformLoc0;
+    private Shader shader;
+
+    public static BlockHighlighter getInstance() {
+        return INSTANCE;
+    }
+
+    public static int randomColor() {
+        return 0xFF000000 | RAND.nextInt(255) << 16 | RAND.nextInt(255) << 8 | RAND.nextInt(255);
+    }
+
+    private BlockHighlighter() {
+    }
+
+    public void onClientStart(MinecraftClient mc) {
+        RenderSystem.glGenBuffers(v -> vbo = v);
+        RenderSystem.glGenVertexArrays(v -> vao = v);
+
+        TEXTURE_ID = mc.getTextureManager().getTexture(TEXTURE).getGlId();
+
+        if (vbo == 0) {
+            LOGGER.error("Failed to generate vertex buffer object");
+        } else {
+            LOGGER.info("Generate vertex buffer object successful with id " + vbo);
+        }
+
+        if (vao == 0) {
+            LOGGER.error("Failed to generate vertex array object");
+        } else {
+            LOGGER.info("Generate vertex array object successful with id " + vao);
+        }
+        addHighlight(new BlockPos(45, 3, -48), randomColor(), Integer.MAX_VALUE);
+    }
+
+    public void onRenderWorld(WorldRenderContext ctx) {
+        Camera cam = ctx.camera();
+        Vec3d cp = cam.getPos();
+        MatrixStack matrices = ctx.matrixStack();
+
+        if (vbo != 0 && vao != 0) {
+
+            shader = GameRenderer.getPositionColorTexShader();
+
+            int program = shader.getProgramRef();
+            int posLoc = GL43.glGetAttribLocation(program, "Position");
+            int colLoc = GL43.glGetAttribLocation(program, "Color");
+            int texLoc = GL43.glGetAttribLocation(program, "UV0");
+            texUniformLoc0 = GL43.glGetUniformLocation(program, "Sampler0");
+
+            RenderSystem.glBindVertexArray(this::getVAO);
+            RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, this::getVBO);
+            // GL20.glBufferData(GL20.GL_ARRAY_BUFFER, new int[]{}, GL20.GL_DYNAMIC_DRAW);
+
+            GL43.glEnableVertexAttribArray(posLoc);
+            GL43.glEnableVertexAttribArray(colLoc);
+            GL43.glEnableVertexAttribArray(texLoc);
+
+            GL43.glVertexAttribPointer(posLoc, 3, GL43.GL_FLOAT, false, 36, 0L);
+            GL43.glVertexAttribPointer(colLoc, 4, GL43.GL_FLOAT, false, 36, 12L);
+            GL43.glVertexAttribPointer(texLoc, 2, GL43.GL_FLOAT, false, 36, 28L);
+
+            // RenderSystem.glBindVertexArray(() -> 0);
+            // RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, () -> 0);
+        }
+
+        matrices.push();
+        matrices.translate(-cp.x, -cp.y, -cp.z);
+        Matrix4f matrix = matrices.peek().getPositionMatrix();
+        matrices.pop();
+
+        RenderSystem.disableCull();
+        RenderSystem.enableBlend();
+        RenderSystem.enablePolygonOffset();
+        RenderSystem.polygonOffset(-1, -1);
+        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        RenderSystem.getModelViewMatrix().load(matrix);
+
+        int program = shader.getProgramRef();
+        GL20.glUseProgram(program);
+
+        // -------------------------------------------------- //
+        // 投影行列
+        int projMatLoc = GL20.glGetUniformLocation(program, "ProjMat");
+        PROJ_MAT_BUFF.position(0);
+        Matrix4f projMat = ctx.projectionMatrix();
+        projMat.writeColumnMajor(PROJ_MAT_BUFF);
+        PROJ_MAT_BUFF.position(0);
+        GL20.glUniformMatrix4fv(projMatLoc, false, PROJ_MAT_BUFF);
+        // shader.projectionMat.set(RenderSystem.getProjectionMatrix());
+        // shader.projectionMat.upload();
+        checkGlError("projectionMat");
+
+        // -------------------------------------------------- //
+        // モデル・ビュー行列
+        int mvMatLoc = GL20.glGetUniformLocation(program, "ModelViewMat");
+        MV_MAT_BUFF.position(0);
+        matrix.writeColumnMajor(MV_MAT_BUFF);
+        MV_MAT_BUFF.position(0);
+        GL20.glUniformMatrix4fv(mvMatLoc, false, MV_MAT_BUFF);
+        // shader.modelViewMat.set(RenderSystem.getModelViewMatrix());
+        // shader.modelViewMat.upload();
+        checkGlError("viewModelMat");
+
+        // -------------------------------------------------- //
+        // カラーモジュレーター
+        int colModLoc = GL20.glGetUniformLocation(program, "ColorModulator");
+        GL20.glUniform4f(colModLoc, 1f, 1f, 1f, 1f);
+        // shader.colorModulator.set(1.0f, 1.0f, 1.0f, 1.0f);
+        // shader.colorModulator.upload();
+        checkGlError("colorModulator");
+
+        // -------------------------------------------------- //
+        // テクスチャのバインド
+        GL43.glActiveTexture(GL43.GL_TEXTURE0);
+        // checkGlError("Set active texture");
+        RenderSystem.disableTexture();
+        // checkGlError("Enable the texture");
+        RenderSystem.bindTexture(TEXTURE_ID);
+        // checkGlError("Bind the texture");
+        GL43.glUniform1i(GL20.glGetUniformLocation(program, "Sampler0"), 0);
+        // checkGlError("Set the sampler to texture unit 0");
+
+        RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, this::getVBO);
+        // if (entryChanged) {
+        // 再構成
+        // LOGGER.info("バッファー再構成中…");
+        entryChanged = false;
+        buffer.clear();
+        for (Entry entry : highlightEntries) {
+            buildBox(entry.getRegion(), entry.getColor(), 0, 0.5F);
+            buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0);
+            buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0);
+        }
+        buffer.flip();
+        vertices = buffer.limit() / 36;
+        // checkGlError("Flip buffer");
+        // if (bufferSizeChanged) {
+        //     bufferSizeChanged = false;
+        // GL20.glBufferData(GL20.GL_ARRAY_BUFFER, buffer, GL20.GL_DYNAMIC_DRAW);
+        // } else {
+        // GL20.glBufferSubData(GL20.GL_ARRAY_BUFFER, 0, buffer);
+        // }
+        GL20.glBufferData(GL15.GL_ARRAY_BUFFER, buffer, GL15.GL_DYNAMIC_DRAW);
+        checkGlError("BufferSubData");
+        // LOGGER.info("バッファー再構成完了");
+        // }
+
+        RenderSystem.glBindVertexArray(this::getVAO);
+        checkGlError("Before render");
+
+        GL20.glDrawArrays(GL20.GL_TRIANGLES, 0, vertices);
+        checkGlError("Draw call");
+
+        RenderSystem.glBindVertexArray(() -> 0);
+        RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, () -> 0);
+        checkGlError("After render");
+
+        RenderSystem.enableCull();
+        RenderSystem.disablePolygonOffset();
+        RenderSystem.disableBlend();
+        RenderSystem.getModelViewMatrix().loadIdentity();
+
+        checkGlError("render tail");
+    }
+
+    public void onClientTick(MinecraftClient ignored) {
+        Iterator<Entry> itr = highlightEntries.iterator();
+        Entry entry;
+        while (itr.hasNext()) {
+            entry = itr.next();
+            entry.tick();
+            if (entry.isExpired()) {
+                itr.remove();
+                entryChanged = true;
+            }
+        }
+    }
+
+    private void grow(int expectRemainSize) {
+        int remain = buffer.capacity() - buffer.position();
+
+        if (remain < expectRemainSize) {
+            // 残余量(容量-現在位置)が期待残容量より小さい場合の処理
+            int added = buffer.capacity() + expectRemainSize;
+            int div = added / bufferRoundSize;
+            if (added % bufferRoundSize > 0) div++;
+
+            int newSize = div * bufferRoundSize;
+            buffer.flip();
+            ByteBuffer oldBuffer = buffer;
+            buffer = GlAllocationUtils.allocateByteBuffer(newSize);
+            buffer.put(oldBuffer);
+            entryChanged = true;
+            bufferSizeChanged = true;
+            FindCmdClient.LOGGER.debug("Grow up Highlighter buffer size to " + newSize + " from " + oldBuffer.capacity());
+        }
+    }
+
+    private void putShort(int a1) {
+        grow(SHORT_SIZE);
+        buffer.putShort((short) a1);
+    }
+
+    private void putShort(short a1) {
+        grow(SHORT_SIZE);
+        buffer.putShort(a1);
+    }
+
+    private void putFloat(double a1) {
+        grow(FLOAT_SIZE);
+        buffer.putFloat((float) a1);
+    }
+
+    private void putFloat(float a1) {
+        grow(FLOAT_SIZE);
+        buffer.putFloat(a1);
+    }
+
+    private void putByte(int a1) {
+        grow(BYTE_SIZE);
+        buffer.put((byte) a1);
+    }
+
+    private void putByte(byte a1) {
+        grow(BYTE_SIZE);
+        buffer.put(a1);
+    }
+
+    private BlockHighlighter vertex(double x, double y, double z) {
+        grow(FLOAT_SIZE * 3);
+        buffer.putFloat((float) x);
+        buffer.putFloat((float) y);
+        buffer.putFloat((float) z);
+
+        return this;
+    }
+
+    private BlockHighlighter texture(double u, double v) {
+        grow(FLOAT_SIZE * 2);
+        buffer.putFloat((float) u);
+        buffer.putFloat((float) v);
+
+        return this;
+    }
+
+    private BlockHighlighter color(double red, double green, double blue, double alpha) {
+        grow(FLOAT_SIZE * 4);
+        buffer.putFloat((float) red);
+        buffer.putFloat((float) green);
+        buffer.putFloat((float) blue);
+        buffer.putFloat((float) alpha);
+
+        return this;
+    }
+
+    public void onClientStop(MinecraftClient ignored) {
+        RenderSystem.glDeleteBuffers(vbo);
+    }
+
+    public int getVAO() {
+        return this.vao;
+    }
+
+    public int getVBO() {
+        return this.vbo;
+    }
+
+    private void checkGlError(String location) {
+        int error = GL20.glGetError();
+        if (error != 0) {
+            FindCmdClient.LOGGER.error("Error " + error + " in " + location);
+        }
+    }
+
+    public void addHighlight(Box box, int color, int lifeTime) {
+        if (!alreadyHighlighted(box)) {
+            highlightEntries.add(new RegionEntry(box, color, lifeTime));
+            entryChanged = true;
+        }
+    }
+
+    public void addHighlight(BlockPos pos, int color, int lifeTime) {
+        addHighlight(new Box(pos), color, lifeTime);
+    }
+
+    public void removeHighlight(Box box) {
+        if (alreadyHighlighted(box)) {
+            highlightEntries.removeIf(entry -> entry.getRegion().equals(box));
+            entryChanged = true;
+        }
+    }
+
+    public void removeHighlight(BlockPos pos) {
+        removeHighlight(new Box(pos));
+    }
+
+    public boolean alreadyHighlighted(Box box) {
+        for (Entry entry : highlightEntries) {
+            if (entry.getRegion().equals(box)) return true;
+        }
+
+        return false;
+    }
+
+    public boolean alreadyHighlighted(BlockPos pos) {
+        Box box = new Box(pos);
+        for (Entry entry : highlightEntries) {
+            if (entry.getRegion().equals(box)) return true;
+        }
+
+        return false;
+    }
+
+    private void buildBox(Box box, int color, float offsetU, float offsetV) {
+        float alpha = ColorHelper.Argb.getAlpha(color) / 255F;
+        float red = ColorHelper.Argb.getRed(color) / 255F;
+        float green = ColorHelper.Argb.getGreen(color) / 255F;
+        float blue = ColorHelper.Argb.getBlue(color) / 255F;
+
+        // 下 (Y-)
+        // 左上
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 上 (U+)
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 西 (Y-)
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 東 (Y+)
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 北 (Z-)
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 南 (Z+)
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+    }
+
+    private void buildBox(VertexConsumer consumer, BlockPos pos, int color, float offsetU, float offsetV) {
+        buildBox(consumer, new Box(pos), color, offsetU, offsetV);
+    }
+
+    /**
+     * 渡された{@link VertexConsumer}に対して{@link VertexFormats#POSITION_COLOR_TEXTURE}のフォーマットで立方体を作成する
+     *
+     * @param consumer 立方体のデータを入れる頂点コンシューマー
+     * @param box      立方体の場所と大きさ
+     * @param color    立方体の色 0xAARRGGBB
+     */
+    private void buildBox(VertexConsumer consumer, Box box, int color, float offsetU, float offsetV) {
+        float alpha = ColorHelper.Argb.getAlpha(color) / 255F;
+        float red = ColorHelper.Argb.getRed(color) / 255F;
+        float green = ColorHelper.Argb.getGreen(color) / 255F;
+        float blue = ColorHelper.Argb.getBlue(color) / 255F;
+
+        // 下 (Y-)
+        consumer.vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+        // 上 (U+)
+        consumer.vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+        // 西 (Y-)
+        consumer.vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+        // 東 (Y+)
+        consumer.vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+        // 北 (Z-)
+        consumer.vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+        // 南 (Z+)
+        consumer.vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV).next();
+        consumer.vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV).next();
+        consumer.vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
+    }
+
+    public void setActionbar(Object msg) {
+        MinecraftClient.getInstance().inGameHud.setOverlayMessage(Text.of(msg.toString()), false);
+    }
+
+    public void addChatMessage(Object... msg) {
+        ChatHud chat = MinecraftClient.getInstance().inGameHud.getChatHud();
+        for (Object obj : msg) {
+            chat.addMessage(Text.of(obj.toString()));
+        }
+    }
+
+    private String[] separate(Matrix4f matrix) {
+        return matrix.toString().split("\n");
+    }
+
+    private interface Entry {
+        Box getRegion();
+
+        int getColor();
+
+        boolean isExpired();
+
+        void tick();
+    }
+
+    private class RegionEntry implements Entry {
+        private final Box box;
+        private final int color;
+        private int lifeTime;
+
+        public RegionEntry(BlockPos pos, int color, int lifeTime) {
+            this(new Box(pos), color, lifeTime);
+        }
+
+        public RegionEntry(Box box, int color, int lifeTime) {
+            this.box = box;
+            this.color = color;
+            this.lifeTime = lifeTime;
+        }
+
+        @Override
+        public Box getRegion() {
+            return this.box;
+        }
+
+        @Override
+        public int getColor() {
+            return this.color;
+        }
+
+        @Override
+        public boolean isExpired() {
+            return this.lifeTime <= 0;
+        }
+
+        @Override
+        public void tick() {
+            if (this.lifeTime >= 1) this.lifeTime--;
+        }
+
+        @Override
+        public int hashCode() {
+            return this.box.hashCode();
+        }
+    }
+}
