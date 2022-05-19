@@ -6,6 +6,7 @@ import com.google.gson.GsonBuilder;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import me.patakapata.findcmd.client.mixin.accessor.DefaultPosArgumentAccessor;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -18,9 +19,13 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.command.argument.BlockPosArgumentType;
+import net.minecraft.command.argument.DefaultPosArgument;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ColorHelper;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec2f;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -48,55 +53,47 @@ public class FindCmdClient implements ClientModInitializer {
         DISPATCHER.register(
                 literal("find").then(
                         argument("pattern", StringArgumentType.string())
-                                .executes(ctx -> findCmd(ctx, 16)
-                                )
-                ).then(
+                                .executes(ctx -> findCmd(ctx, 16))).then(
                         argument("radius", IntegerArgumentType.integer(1)).then(
-                                argument("pattern", StringArgumentType.string()
-                                ).executes(ctx -> findCmd(ctx, IntegerArgumentType.getInteger(ctx, "radius")))
+                                argument("pattern", StringArgumentType.string())
+                                        .requires(src -> src.hasPermissionLevel(2))
+                                        .executes(ctx -> findCmd(ctx, IntegerArgumentType.getInteger(ctx, "radius")))
                         )
                 )
         );
+
         DISPATCHER.register(
                 literal("highlight").then(
-                        argument("x", IntegerArgumentType.integer()).then(
-                                argument("y", IntegerArgumentType.integer()).then(
-                                        argument("z", IntegerArgumentType.integer()).then(
-                                                argument("lifeTime", IntegerArgumentType.integer()).then(
-                                                        argument("red", IntegerArgumentType.integer(0, 255)).then(
-                                                                argument("green", IntegerArgumentType.integer(0, 255)).then(
-                                                                        argument("blue", IntegerArgumentType.integer(0, 255)).then(
-                                                                                argument("alpha", IntegerArgumentType.integer(0, 255))
-                                                                                        .executes(FindCmdClient::highlightCmdPos)
-                                                                        )
-                                                                )
-                                                        )
-                                                )
-                                        )
-                                )
+                        argument("position", BlockPosArgumentType.blockPos()).then(
+                                argument("color", ColorArgumentType.color())
+                                        .executes(FindCmdClient::highlightCmdPos)
                         )
                 )
         );
+
         WorldRenderEvents.END.register(BlockHighlighter.getInstance()::onRenderWorld);
         ClientTickEvents.END_CLIENT_TICK.register(BlockHighlighter.getInstance()::onClientTick);
         ClientLifecycleEvents.CLIENT_STARTED.register(BlockHighlighter.getInstance()::onClientStart);
         ClientLifecycleEvents.CLIENT_STOPPING.register(BlockHighlighter.getInstance()::onClientStop);
     }
 
+    public static Vec3d toAbsolutePos(DefaultPosArgument arg, FabricClientCommandSource src) {
+        Vec3d vec = src.getPosition();
+        DefaultPosArgumentAccessor access = (DefaultPosArgumentAccessor) arg;
+        return new Vec3d(access.accessor_getX().toAbsoluteCoordinate(vec.x), access.accessor_getY().toAbsoluteCoordinate(vec.y), access.accessor_getZ().toAbsoluteCoordinate(vec.z));
+    }
+
+    public static Vec2f toAbsoluteRot(DefaultPosArgument arg, FabricClientCommandSource src) {
+        Vec2f vec = src.getRotation();
+        DefaultPosArgumentAccessor access = (DefaultPosArgumentAccessor) arg;
+        return new Vec2f((float) access.accessor_getX().toAbsoluteCoordinate(vec.x), (float) access.accessor_getY().toAbsoluteCoordinate(vec.y));
+    }
+
     private static int highlightCmdPos(CommandContext<FabricClientCommandSource> ctx) {
-        BlockPos pos = new BlockPos(
-                IntegerArgumentType.getInteger(ctx, "x"),
-                IntegerArgumentType.getInteger(ctx, "y"),
-                IntegerArgumentType.getInteger(ctx, "z")
-        );
-        int lifeTime = IntegerArgumentType.getInteger(ctx, "lifeTime");
-        int color = ColorHelper.Argb.getArgb(
-                IntegerArgumentType.getInteger(ctx, "alpha"),
-                IntegerArgumentType.getInteger(ctx, "red"),
-                IntegerArgumentType.getInteger(ctx, "green"),
-                IntegerArgumentType.getInteger(ctx, "blue")
-        );
-        BlockHighlighter.getInstance().addHighlight(pos, color, lifeTime);
+        DefaultPosArgument positionArg = ctx.getArgument("position", DefaultPosArgument.class);
+        BlockPos position = new BlockPos(toAbsolutePos(positionArg, ctx.getSource()));
+        Color color = ColorArgumentType.getColor(ctx, "color");
+        BlockHighlighter.getInstance().addHighlight(new Box(position), color.getPacked(), 200);
         return 1;
     }
 
@@ -167,16 +164,16 @@ public class FindCmdClient implements ClientModInitializer {
     }
 
     public static void sendResult(BlockPos pos, String msg, @Nullable String tooltip) {
-        String raw = "{\"translate\":\"[%s] %s, %s, %s > %s\",\"with\":["
-                + "{\"text\":\"FindCmd\",\"color\":\"gold\"},"
-                + "{\"text\":\"%s\",\"color\":\"red\"},".formatted("%5d".formatted(pos.getX()).replace(' ', '_'))
-                + "{\"text\":\"%s\",\"color\":\"green\"},".formatted("%5d".formatted(pos.getY()).replace(' ', '_'))
-                + "{\"text\":\"%s\",\"color\":\"aqua\"},".formatted("%5d".formatted(pos.getZ()).replace(' ', '_'))
-                + "{\"text\":\"%s\"".formatted(escape(msg));
+        String raw = "{\"translate\":\"[%s] %s, %s, %s > %s\",\"with\":[" + "{\"text\":\"FindCmd\",\"color\":\"gold\"}," + "{\"text\":\"%s\",\"color\":\"red\"},".formatted("%5d".formatted(pos.getX())
+                .replace(' ', '_')) + "{\"text\":\"%s\",\"color\":\"green\"},".formatted("%5d".formatted(pos.getY())
+                .replace(' ', '_')) + "{\"text\":\"%s\",\"color\":\"aqua\"},".formatted("%5d".formatted(pos.getZ()).replace(' ', '_')) + "{\"text\":\"%s\"".formatted(escape(msg));
 
         try {
             if (tooltip != null) {
-                raw += ",\"hoverEvent\":{\"action\":\"show_text\",\"value\":\"Click to facing this block\n" + escape(tooltip) + "\"}";
+                Color color = Color.of(BlockHighlighter.randomColor());
+
+                raw += ",\"hoverEvent\":{\"action\":\"show_text\",\"value\":\"クリックするとこのブロックをハイライトします\n" + escape(tooltip) + "\"}";
+                raw += ",\"clickEvent\":{\"action\":\"run_command\",\"value\":\"/highlight %d %d %d %d %d %d %d\"}".formatted(pos.getX(), pos.getY(), pos.getZ(), color.getIntRed(), color.getIntGreen(), color.getIntBlue(), color.getIntAlpha());
             }
 
             raw += "}],\"color\":\"gray\"}";

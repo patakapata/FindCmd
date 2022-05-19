@@ -65,7 +65,6 @@ public abstract class ClientPlayNetworkHandlerMixin implements ClientPlayPacketL
                             foot = "§r§7" + foot;
 
                             FindCmdClient.sendResult(pos, head + body + foot, command);
-                            BlockHighlighter.getInstance().addHighlight(pos, BlockHighlighter.randomColor(), 200);
                         } else {
                             FindCmdClient.LOGGER.debug("Doesn't match with specified pattern by command");
                         }

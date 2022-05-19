@@ -4,7 +4,8 @@
   "package": "me.patakapata.findcmd.client.mixin",
   "compatibilityLevel": "JAVA_17",
   "client": [
-    "ClientPlayNetworkHandlerMixin"
+    "ClientPlayNetworkHandlerMixin",
+    "accessor.DefaultPosArgumentAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

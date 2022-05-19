@@ -10,9 +10,7 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.*;
-import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
-import org.lwjgl.opengl.GL43;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -22,6 +20,7 @@ import java.util.Random;
 import java.util.Set;
 
 import static me.patakapata.findcmd.client.FindCmdClient.LOGGER;
+import static org.lwjgl.opengl.GL30.*;
 
 public class BlockHighlighter {
     private static final BlockHighlighter INSTANCE = new BlockHighlighter();
@@ -48,6 +47,8 @@ public class BlockHighlighter {
     private int texUniformLoc0;
     private Shader shader;
 
+    private RenderLayer LAYER = RenderLayer.getOutline(TEXTURE);
+
     public static BlockHighlighter getInstance() {
         return INSTANCE;
     }
@@ -60,8 +61,8 @@ public class BlockHighlighter {
     }
 
     public void onClientStart(MinecraftClient mc) {
-        RenderSystem.glGenBuffers(v -> vbo = v);
-        RenderSystem.glGenVertexArrays(v -> vao = v);
+        vbo = glGenBuffers();
+        vao = glGenVertexArrays();
 
         TEXTURE_ID = mc.getTextureManager().getTexture(TEXTURE).getGlId();
 
@@ -76,133 +77,123 @@ public class BlockHighlighter {
         } else {
             LOGGER.info("Generate vertex array object successful with id " + vao);
         }
-        addHighlight(new BlockPos(45, 3, -48), randomColor(), Integer.MAX_VALUE);
+
+        setupBuffer();
+    }
+
+    private void setupBuffer() {
+        shader = GameRenderer.getPositionColorTexShader();
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, 0L, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        int program = shader.getProgramRef();
+        glBindVertexArray(vao);
+
+        int posLoc = glGetAttribLocation(program, "Position");
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer(posLoc, 3, GL_FLOAT, false, 36, 0L);
+        glEnableVertexAttribArray(posLoc);
+
+        int colLoc = glGetAttribLocation(program, "Color");
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer(colLoc, 4, GL_FLOAT, false, 36, 12L);
+        glEnableVertexAttribArray(colLoc);
+
+        int texLoc = glGetAttribLocation(program, "UV0");
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glVertexAttribPointer(texLoc, 2, GL_FLOAT, false, 36, 28L);
+        glEnableVertexAttribArray(texLoc);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        texUniformLoc0 = glGetUniformLocation(program, "Sampler0");
+        checkGlError("setup - unbind buffers");
+
+        LOGGER.info("Complete buffers setup");
     }
 
     public void onRenderWorld(WorldRenderContext ctx) {
+        MinecraftClient mc = MinecraftClient.getInstance();
         Camera cam = ctx.camera();
         Vec3d cp = cam.getPos();
         MatrixStack matrices = ctx.matrixStack();
-
-        if (vbo != 0 && vao != 0) {
-
-            shader = GameRenderer.getPositionColorTexShader();
-
-            int program = shader.getProgramRef();
-            int posLoc = GL43.glGetAttribLocation(program, "Position");
-            int colLoc = GL43.glGetAttribLocation(program, "Color");
-            int texLoc = GL43.glGetAttribLocation(program, "UV0");
-            texUniformLoc0 = GL43.glGetUniformLocation(program, "Sampler0");
-
-            RenderSystem.glBindVertexArray(this::getVAO);
-            RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, this::getVBO);
-            // GL20.glBufferData(GL20.GL_ARRAY_BUFFER, new int[]{}, GL20.GL_DYNAMIC_DRAW);
-
-            GL43.glEnableVertexAttribArray(posLoc);
-            GL43.glEnableVertexAttribArray(colLoc);
-            GL43.glEnableVertexAttribArray(texLoc);
-
-            GL43.glVertexAttribPointer(posLoc, 3, GL43.GL_FLOAT, false, 36, 0L);
-            GL43.glVertexAttribPointer(colLoc, 4, GL43.GL_FLOAT, false, 36, 12L);
-            GL43.glVertexAttribPointer(texLoc, 2, GL43.GL_FLOAT, false, 36, 28L);
-
-            // RenderSystem.glBindVertexArray(() -> 0);
-            // RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, () -> 0);
-        }
 
         matrices.push();
         matrices.translate(-cp.x, -cp.y, -cp.z);
         Matrix4f matrix = matrices.peek().getPositionMatrix();
         matrices.pop();
 
-        RenderSystem.disableCull();
+        RenderSystem.disableDepthTest();
         RenderSystem.enableBlend();
         RenderSystem.enablePolygonOffset();
         RenderSystem.polygonOffset(-1, -1);
         RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
         RenderSystem.getModelViewMatrix().load(matrix);
 
+        shader = GameRenderer.getPositionColorTexShader();
         int program = shader.getProgramRef();
-        GL20.glUseProgram(program);
+        glUseProgram(program);
 
         // -------------------------------------------------- //
         // 投影行列
-        int projMatLoc = GL20.glGetUniformLocation(program, "ProjMat");
+        int projMatLoc = glGetUniformLocation(program, "ProjMat");
         PROJ_MAT_BUFF.position(0);
         Matrix4f projMat = ctx.projectionMatrix();
         projMat.writeColumnMajor(PROJ_MAT_BUFF);
         PROJ_MAT_BUFF.position(0);
-        GL20.glUniformMatrix4fv(projMatLoc, false, PROJ_MAT_BUFF);
-        // shader.projectionMat.set(RenderSystem.getProjectionMatrix());
-        // shader.projectionMat.upload();
-        checkGlError("projectionMat");
+        glUniformMatrix4fv(projMatLoc, false, PROJ_MAT_BUFF);
 
         // -------------------------------------------------- //
         // モデル・ビュー行列
-        int mvMatLoc = GL20.glGetUniformLocation(program, "ModelViewMat");
+        int mvMatLoc = glGetUniformLocation(program, "ModelViewMat");
         MV_MAT_BUFF.position(0);
         matrix.writeColumnMajor(MV_MAT_BUFF);
         MV_MAT_BUFF.position(0);
-        GL20.glUniformMatrix4fv(mvMatLoc, false, MV_MAT_BUFF);
-        // shader.modelViewMat.set(RenderSystem.getModelViewMatrix());
-        // shader.modelViewMat.upload();
-        checkGlError("viewModelMat");
+        glUniformMatrix4fv(mvMatLoc, false, MV_MAT_BUFF);
 
         // -------------------------------------------------- //
         // カラーモジュレーター
-        int colModLoc = GL20.glGetUniformLocation(program, "ColorModulator");
-        GL20.glUniform4f(colModLoc, 1f, 1f, 1f, 1f);
-        // shader.colorModulator.set(1.0f, 1.0f, 1.0f, 1.0f);
-        // shader.colorModulator.upload();
-        checkGlError("colorModulator");
+        int colModLoc = glGetUniformLocation(program, "ColorModulator");
+        glUniform4f(colModLoc, 1f, 1f, 1f, 1f);
 
         // -------------------------------------------------- //
         // テクスチャのバインド
-        GL43.glActiveTexture(GL43.GL_TEXTURE0);
-        // checkGlError("Set active texture");
+        glActiveTexture(GL_TEXTURE0);
         RenderSystem.disableTexture();
-        // checkGlError("Enable the texture");
         RenderSystem.bindTexture(TEXTURE_ID);
-        // checkGlError("Bind the texture");
-        GL43.glUniform1i(GL20.glGetUniformLocation(program, "Sampler0"), 0);
-        // checkGlError("Set the sampler to texture unit 0");
+        glUniform1i(glGetUniformLocation(program, "Sampler0"), 0);
 
-        RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, this::getVBO);
-        // if (entryChanged) {
-        // 再構成
-        // LOGGER.info("バッファー再構成中…");
-        entryChanged = false;
-        buffer.clear();
-        for (Entry entry : highlightEntries) {
-            buildBox(entry.getRegion(), entry.getColor(), 0, 0.5F);
-            buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0);
-            buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0);
+        if (entryChanged) {
+            // 再構成
+            entryChanged = false;
+            LOGGER.debug("バッファー再構成中…");
+            buffer.clear();
+            for (Entry entry : highlightEntries) {
+                buildBox(entry.getRegion(), entry.getColor(), 0, 0);
+                buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0.5F);
+                buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0.5F);
+            }
+            buffer.flip();
+            vertices = buffer.limit() / 36;
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            if (bufferSizeChanged) {
+                bufferSizeChanged = false;
+                glBufferData(GL_ARRAY_BUFFER, buffer.capacity(), GL_DYNAMIC_DRAW);
+            }
+            glBufferSubData(GL_ARRAY_BUFFER, 0, buffer);
+
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            LOGGER.debug("バッファー再構成完了");
         }
-        buffer.flip();
-        vertices = buffer.limit() / 36;
-        // checkGlError("Flip buffer");
-        // if (bufferSizeChanged) {
-        //     bufferSizeChanged = false;
-        // GL20.glBufferData(GL20.GL_ARRAY_BUFFER, buffer, GL20.GL_DYNAMIC_DRAW);
-        // } else {
-        // GL20.glBufferSubData(GL20.GL_ARRAY_BUFFER, 0, buffer);
-        // }
-        GL20.glBufferData(GL15.GL_ARRAY_BUFFER, buffer, GL15.GL_DYNAMIC_DRAW);
-        checkGlError("BufferSubData");
-        // LOGGER.info("バッファー再構成完了");
-        // }
 
-        RenderSystem.glBindVertexArray(this::getVAO);
-        checkGlError("Before render");
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, vertices);
+        glBindVertexArray(0);
 
-        GL20.glDrawArrays(GL20.GL_TRIANGLES, 0, vertices);
-        checkGlError("Draw call");
-
-        RenderSystem.glBindVertexArray(() -> 0);
-        RenderSystem.glBindBuffer(GL20.GL_ARRAY_BUFFER, () -> 0);
-        checkGlError("After render");
-
-        RenderSystem.enableCull();
+        RenderSystem.enableDepthTest();
         RenderSystem.disablePolygonOffset();
         RenderSystem.disableBlend();
         RenderSystem.getModelViewMatrix().loadIdentity();
@@ -237,7 +228,6 @@ public class BlockHighlighter {
             ByteBuffer oldBuffer = buffer;
             buffer = GlAllocationUtils.allocateByteBuffer(newSize);
             buffer.put(oldBuffer);
-            entryChanged = true;
             bufferSizeChanged = true;
             FindCmdClient.LOGGER.debug("Grow up Highlighter buffer size to " + newSize + " from " + oldBuffer.capacity());
         }
