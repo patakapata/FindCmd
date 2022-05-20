@@ -3,11 +3,9 @@ package me.patakapata.findcmd.client;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.render.*;
 import net.minecraft.client.util.GlAllocationUtils;
 import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.*;
 import org.lwjgl.opengl.GL20;
@@ -35,8 +33,6 @@ public class BlockHighlighter {
     private final FloatBuffer MV_MAT_BUFF = GlAllocationUtils.allocateByteBuffer(4 * 4 * 4).asFloatBuffer();
 
     private final int BYTE_SIZE = Byte.SIZE;
-    private final int INT_SIZE = Integer.SIZE / BYTE_SIZE;
-    private final int SHORT_SIZE = Short.SIZE / BYTE_SIZE;
     private final int FLOAT_SIZE = Float.SIZE / BYTE_SIZE;
 
     private boolean bufferSizeChanged = false;
@@ -44,10 +40,7 @@ public class BlockHighlighter {
     private int vertices = 0;
     private int vbo;
     private int vao;
-    private int texUniformLoc0;
     private Shader shader;
-
-    private RenderLayer LAYER = RenderLayer.getOutline(TEXTURE);
 
     public static BlockHighlighter getInstance() {
         return INSTANCE;
@@ -108,15 +101,12 @@ public class BlockHighlighter {
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
-
-        texUniformLoc0 = glGetUniformLocation(program, "Sampler0");
         checkGlError("setup - unbind buffers");
 
         LOGGER.info("Complete buffers setup");
     }
 
     public void onRenderWorld(WorldRenderContext ctx) {
-        MinecraftClient mc = MinecraftClient.getInstance();
         Camera cam = ctx.camera();
         Vec3d cp = cam.getPos();
         MatrixStack matrices = ctx.matrixStack();
@@ -134,6 +124,10 @@ public class BlockHighlighter {
         RenderSystem.getModelViewMatrix().load(matrix);
 
         shader = GameRenderer.getPositionColorTexShader();
+        if (shader == null) {
+            // コアシェーダーが何らかの理由で存在しない場合描画せずに終了
+            return;
+        }
         int program = shader.getProgramRef();
         glUseProgram(program);
 
@@ -171,10 +165,14 @@ public class BlockHighlighter {
             entryChanged = false;
             LOGGER.debug("バッファー再構成中…");
             buffer.clear();
+            int i = 0;
+            int size = highlightEntries.size();
             for (Entry entry : highlightEntries) {
-                buildBox(entry.getRegion(), entry.getColor(), 0, 0);
-                buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0.5F);
-                buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0.5F);
+                // 最初の要素以外は縮退を最初に付ける
+                buildBox(entry.getRegion(), entry.getColor(), 0, 0, i != 0, true);
+                buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0.5F, true, true);
+                // 最後の要素以外は縮退を最後に付ける
+                buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0.5F, true, ++i != size);
             }
             buffer.flip();
             vertices = buffer.limit() / 36;
@@ -190,7 +188,7 @@ public class BlockHighlighter {
         }
 
         glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, vertices);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, vertices);
         glBindVertexArray(0);
 
         RenderSystem.enableDepthTest();
@@ -233,36 +231,6 @@ public class BlockHighlighter {
         }
     }
 
-    private void putShort(int a1) {
-        grow(SHORT_SIZE);
-        buffer.putShort((short) a1);
-    }
-
-    private void putShort(short a1) {
-        grow(SHORT_SIZE);
-        buffer.putShort(a1);
-    }
-
-    private void putFloat(double a1) {
-        grow(FLOAT_SIZE);
-        buffer.putFloat((float) a1);
-    }
-
-    private void putFloat(float a1) {
-        grow(FLOAT_SIZE);
-        buffer.putFloat(a1);
-    }
-
-    private void putByte(int a1) {
-        grow(BYTE_SIZE);
-        buffer.put((byte) a1);
-    }
-
-    private void putByte(byte a1) {
-        grow(BYTE_SIZE);
-        buffer.put(a1);
-    }
-
     private BlockHighlighter vertex(double x, double y, double z) {
         grow(FLOAT_SIZE * 3);
         buffer.putFloat((float) x);
@@ -272,6 +240,7 @@ public class BlockHighlighter {
         return this;
     }
 
+    @SuppressWarnings("UnusedReturnValue")
     private BlockHighlighter texture(double u, double v) {
         grow(FLOAT_SIZE * 2);
         buffer.putFloat((float) u);
@@ -294,14 +263,6 @@ public class BlockHighlighter {
         RenderSystem.glDeleteBuffers(vbo);
     }
 
-    public int getVAO() {
-        return this.vao;
-    }
-
-    public int getVBO() {
-        return this.vbo;
-    }
-
     private void checkGlError(String location) {
         int error = GL20.glGetError();
         if (error != 0) {
@@ -316,6 +277,7 @@ public class BlockHighlighter {
         }
     }
 
+    @SuppressWarnings("unused")
     public void addHighlight(BlockPos pos, int color, int lifeTime) {
         addHighlight(new Box(pos), color, lifeTime);
     }
@@ -327,6 +289,7 @@ public class BlockHighlighter {
         }
     }
 
+    @SuppressWarnings("unused")
     public void removeHighlight(BlockPos pos) {
         removeHighlight(new Box(pos));
     }
@@ -339,6 +302,7 @@ public class BlockHighlighter {
         return false;
     }
 
+    @SuppressWarnings("unused")
     public boolean alreadyHighlighted(BlockPos pos) {
         Box box = new Box(pos);
         for (Entry entry : highlightEntries) {
@@ -348,57 +312,67 @@ public class BlockHighlighter {
         return false;
     }
 
-    private void buildBox(Box box, int color, float offsetU, float offsetV) {
+    @SuppressWarnings("SameParameterValue")
+    private void buildBox(Box box, int color, float offsetU, float offsetV, boolean useDegenerateHead, boolean useDegenerateTail) {
         float alpha = ColorHelper.Argb.getAlpha(color) / 255F;
         float red = ColorHelper.Argb.getRed(color) / 255F;
         float green = ColorHelper.Argb.getGreen(color) / 255F;
         float blue = ColorHelper.Argb.getBlue(color) / 255F;
 
         // 下 (Y-)
-        // 左上
+        if (useDegenerateHead) {
+            vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        }
         vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 縮退
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         // 上 (U+)
         vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 縮退
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         // 西 (Y-)
         vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 縮退
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         // 東 (Y+)
         vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 縮退
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         // 北 (Z-)
         vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        // 縮退
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         // 南 (Z+)
         vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
         vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
         vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        if (useDegenerateTail) {
+            vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        }
     }
 
+    @SuppressWarnings("unused")
     private void buildBox(VertexConsumer consumer, BlockPos pos, int color, float offsetU, float offsetV) {
         buildBox(consumer, new Box(pos), color, offsetU, offsetV);
     }
@@ -448,21 +422,6 @@ public class BlockHighlighter {
         consumer.vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV).next();
     }
 
-    public void setActionbar(Object msg) {
-        MinecraftClient.getInstance().inGameHud.setOverlayMessage(Text.of(msg.toString()), false);
-    }
-
-    public void addChatMessage(Object... msg) {
-        ChatHud chat = MinecraftClient.getInstance().inGameHud.getChatHud();
-        for (Object obj : msg) {
-            chat.addMessage(Text.of(obj.toString()));
-        }
-    }
-
-    private String[] separate(Matrix4f matrix) {
-        return matrix.toString().split("\n");
-    }
-
     private interface Entry {
         Box getRegion();
 
@@ -473,14 +432,10 @@ public class BlockHighlighter {
         void tick();
     }
 
-    private class RegionEntry implements Entry {
+    private static class RegionEntry implements Entry {
         private final Box box;
         private final int color;
         private int lifeTime;
-
-        public RegionEntry(BlockPos pos, int color, int lifeTime) {
-            this(new Box(pos), color, lifeTime);
-        }
 
         public RegionEntry(Box box, int color, int lifeTime) {
             this.box = box;
