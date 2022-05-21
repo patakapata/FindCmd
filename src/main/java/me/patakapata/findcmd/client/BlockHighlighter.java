@@ -4,9 +4,9 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.*;
+import net.minecraft.client.texture.Sprite;
 import net.minecraft.client.util.GlAllocationUtils;
 import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.*;
 import org.lwjgl.opengl.GL20;
 
@@ -24,8 +24,6 @@ public class BlockHighlighter {
     private static final BlockHighlighter INSTANCE = new BlockHighlighter();
     private static final Random RAND = new Random();
 
-    private final Identifier TEXTURE = new Identifier("findcmd", "textures/misc/overlay.png");
-    private int TEXTURE_ID;
     private final Set<Entry> highlightEntries = new HashSet<>();
     private final int bufferRoundSize = 1024;
     private ByteBuffer buffer = GlAllocationUtils.allocateByteBuffer(bufferRoundSize);
@@ -53,11 +51,9 @@ public class BlockHighlighter {
     private BlockHighlighter() {
     }
 
-    public void onClientStart(MinecraftClient mc) {
+    public void onClientStart(MinecraftClient ignored) {
         vbo = glGenBuffers();
         vao = glGenVertexArrays();
-
-        TEXTURE_ID = mc.getTextureManager().getTexture(TEXTURE).getGlId();
 
         if (vbo == 0) {
             LOGGER.error("Failed to generate vertex buffer object");
@@ -157,22 +153,25 @@ public class BlockHighlighter {
         // テクスチャのバインド
         glActiveTexture(GL_TEXTURE0);
         RenderSystem.disableTexture();
-        RenderSystem.bindTexture(TEXTURE_ID);
+        RenderSystem.bindTexture(FindCmdClient.getOverlaySprite().getAtlas().getGlId());
         glUniform1i(glGetUniformLocation(program, "Sampler0"), 0);
 
         if (entryChanged) {
             // 再構成
             entryChanged = false;
             LOGGER.debug("バッファー再構成中…");
+            UV base = new UV(FindCmdClient.getOverlaySprite()).scale(1, 0.5f);
+            UV overlay = base.clone().move(0, 1);
             buffer.clear();
             int i = 0;
             int size = highlightEntries.size();
             for (Entry entry : highlightEntries) {
                 // 最初の要素以外は縮退を最初に付ける
-                buildBox(entry.getRegion(), entry.getColor(), 0, 0, i != 0, true);
-                buildBox(entry.getRegion().expand(0.01), 0xFF000000, 0, 0.5F, true, true);
+                buildBox(entry.getRegion(), entry.getColor() & 0xFF000000, base, i != 0, true);
+                buildBox(entry.getRegion().expand(0.01), entry.getColor(), base, true, true);
+                buildBox(entry.getRegion().expand(0.015), entry.getColor() & 0xFF000000, overlay, true, true);
                 // 最後の要素以外は縮退を最後に付ける
-                buildBox(entry.getRegion().expand(0.02), entry.getColor(), 0, 0.5F, true, ++i != size);
+                buildBox(entry.getRegion().expand(0.02), entry.getColor(), overlay, true, ++i != size);
             }
             buffer.flip();
             vertices = buffer.limit() / 36;
@@ -312,63 +311,67 @@ public class BlockHighlighter {
         return false;
     }
 
-    @SuppressWarnings("SameParameterValue")
-    private void buildBox(Box box, int color, float offsetU, float offsetV, boolean useDegenerateHead, boolean useDegenerateTail) {
+    private void buildBox(Box box, int color, UV uv, boolean useDegenerateHead, boolean useDegenerateTail) {
         float alpha = ColorHelper.Argb.getAlpha(color) / 255F;
         float red = ColorHelper.Argb.getRed(color) / 255F;
         float green = ColorHelper.Argb.getGreen(color) / 255F;
         float blue = ColorHelper.Argb.getBlue(color) / 255F;
 
+        float u0 = uv.getMinU();
+        float v0 = uv.getMinV();
+        float u1 = uv.getMaxU();
+        float v1 = uv.getMaxV();
+
         // 下 (Y-)
         if (useDegenerateHead) {
-            vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+            vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
         }
-        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
         // 縮退
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
         // 上 (U+)
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
         // 縮退
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u0, v0);
         // 西 (Y-)
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u1, v1);
         // 縮退
-        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u1, v1);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
         // 東 (Y+)
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
         // 縮退
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u0, v0);
         // 北 (Z-)
-        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.maxX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.maxX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.minX, box.maxY, box.minZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
         // 縮退
-        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
+        vertex(box.minX, box.minY, box.minZ).color(red, green, blue, alpha).texture(u1, v1);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
         // 南 (Z+)
-        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.0f + offsetV);
-        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(0 + offsetU, 0.5f + offsetV);
-        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.0f + offsetV);
-        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+        vertex(box.minX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u0, v0);
+        vertex(box.minX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u0, v1);
+        vertex(box.maxX, box.maxY, box.maxZ).color(red, green, blue, alpha).texture(u1, v0);
+        vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u1, v1);
         if (useDegenerateTail) {
-            vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(1 + offsetU, 0.5f + offsetV);
+            vertex(box.maxX, box.minY, box.maxZ).color(red, green, blue, alpha).texture(u1, v1);
         }
     }
 
@@ -466,6 +469,98 @@ public class BlockHighlighter {
         @Override
         public int hashCode() {
             return this.box.hashCode();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static class UV {
+        private float u0;
+        private float v0;
+        private float u1;
+        private float v1;
+
+        public UV(UV uv) {
+            this(uv.u0, uv.v0, uv.u1, uv.v1);
+        }
+
+        public UV(Sprite sprite) {
+            this(sprite.getMinU(), sprite.getMinV(), sprite.getMaxU(), sprite.getMaxV());
+        }
+
+        public UV(float u0, float v0, float u1, float v1) {
+            this.u0 = u0;
+            this.v0 = v0;
+            this.u1 = u1;
+            this.v1 = v1;
+        }
+
+        @SuppressWarnings({"MethodDoesntCallSuperMethod", "CloneDoesntDeclareCloneNotSupportedException"})
+        @Override
+        protected UV clone() {
+            return new UV(this);
+        }
+
+        public UV move(float u, float v) {
+            float lU = getLengthU() * u;
+            float lV = getLengthV() * v;
+
+            u0 += lU;
+            v0 += lV;
+            u1 += lU;
+            v1 += lV;
+
+            return this;
+        }
+
+        /**
+         * 最小をずらす
+         */
+        public UV moveMin(float u, float v) {
+            u0 += getLengthU() * u;
+            v0 += getLengthV() * v;
+
+            return this;
+        }
+
+        /**
+         * 最大をずらす
+         */
+        public UV moveMax(float u, float v) {
+            u1 += getLengthU() * u;
+            v1 += getLengthU() * v;
+
+            return this;
+        }
+
+        public UV scale(float u, float v) {
+            u1 = u0 + getLengthU() * u;
+            v1 = v0 + getLengthV() * v;
+
+            return this;
+        }
+
+        public float getMinU() {
+            return u0;
+        }
+
+        public float getLengthU() {
+            return u1 - u0;
+        }
+
+        public float getMinV() {
+            return v0;
+        }
+
+        public float getMaxU() {
+            return u1;
+        }
+
+        public float getLengthV() {
+            return v1 - v0;
+        }
+
+        public float getMaxV() {
+            return v1;
         }
     }
 }

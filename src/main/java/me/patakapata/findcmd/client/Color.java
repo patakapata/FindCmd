@@ -1,11 +1,17 @@
 package me.patakapata.findcmd.client;
 
+import com.mojang.brigadier.context.CommandContext;
+
 public class Color {
     private float red;
     private float green;
     private float blue;
     private float alpha;
     private int packed;
+
+    public static Color getColor(CommandContext<?> ctx, String name) {
+        return ctx.getArgument(name, Color.class);
+    }
 
     /**
      * @param color 0xAARRGGBB

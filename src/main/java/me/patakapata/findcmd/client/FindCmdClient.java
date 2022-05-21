@@ -19,12 +19,15 @@ import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.texture.Sprite;
 import net.minecraft.command.argument.BlockPosArgumentType;
 import net.minecraft.command.argument.DefaultPosArgument;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.StringNbtReader;
+import net.minecraft.screen.PlayerScreenHandler;
 import net.minecraft.text.*;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec2f;
@@ -48,6 +51,9 @@ public class FindCmdClient implements ClientModInitializer {
     public static final List<Block> COMMAND_BLOCKS = ImmutableList.of(Blocks.COMMAND_BLOCK, Blocks.CHAIN_COMMAND_BLOCK, Blocks.REPEATING_COMMAND_BLOCK);
     public static final Map<BlockPos, Pattern> queuedPos = new HashMap<>();
     public static final Logger LOGGER = LogManager.getLogger("FindCmd");
+    public static final String MOD_ID = "findcmd";
+    public static final Identifier OVERLAY_TEXTURE = new Identifier(MOD_ID, "textures/misc/overlay.png");
+    public static final Identifier OVERLAY_RESOURCE_ID = new Identifier(MOD_ID, "misc/overlay");
 
     private static final MutableText TEMPLATE;
 
@@ -62,6 +68,10 @@ public class FindCmdClient implements ClientModInitializer {
         body.setStyle(TEMPLATE.getStyle().withColor(Formatting.DARK_GRAY));
 
         TEMPLATE.append(body);
+    }
+
+    public static Sprite getOverlaySprite() {
+        return MinecraftClient.getInstance().getSpriteAtlas(PlayerScreenHandler.BLOCK_ATLAS_TEXTURE).apply(OVERLAY_RESOURCE_ID);
     }
 
     public static Text applyTemplate(String body) {
@@ -90,8 +100,13 @@ public class FindCmdClient implements ClientModInitializer {
                 literal("highlight").then(
                         argument("position", BlockPosArgumentType.blockPos()).then(
                                 argument("color", ColorArgumentType.color())
-                                        .executes(ctx -> highlightCmdPos(ctx, ctx.getArgument("color", Color.class)))
-                        ).executes(ctx -> highlightCmdPos(ctx, Color.of(BlockHighlighter.randomColor())))
+                                        .executes(ctx -> highlightPos(new Box(getBlockPos(ctx, "position")), Color.getColor(ctx, "color")))
+                        ).then(
+                                argument("end", BlockPosArgumentType.blockPos()).then(
+                                        argument("color", ColorArgumentType.color())
+                                                .executes(ctx -> highlightPos(new Box(getBlockPos(ctx, "position"), getBlockPos(ctx, "end")), Color.getColor(ctx, "color")))
+                                ).executes(ctx -> highlightPos(new Box(getBlockPos(ctx, "position"), getBlockPos(ctx, "end")), new Color(BlockHighlighter.randomColor())))
+                        ).executes(ctx -> highlightPos(new Box(getBlockPos(ctx, "position")), new Color(BlockHighlighter.randomColor())))
                 )
         );
 
@@ -99,6 +114,11 @@ public class FindCmdClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(BlockHighlighter.getInstance()::onClientTick);
         ClientLifecycleEvents.CLIENT_STARTED.register(BlockHighlighter.getInstance()::onClientStart);
         ClientLifecycleEvents.CLIENT_STOPPING.register(BlockHighlighter.getInstance()::onClientStop);
+    }
+
+    public static BlockPos getBlockPos(CommandContext<FabricClientCommandSource> ctx, String name) {
+        DefaultPosArgument arg = ctx.getArgument(name, DefaultPosArgument.class);
+        return new BlockPos(toAbsolutePos(arg, ctx.getSource()));
     }
 
     public static Vec3d toAbsolutePos(DefaultPosArgument arg, FabricClientCommandSource src) {
@@ -113,10 +133,8 @@ public class FindCmdClient implements ClientModInitializer {
         return new Vec2f((float) access.accessor_getX().toAbsoluteCoordinate(vec.x), (float) access.accessor_getY().toAbsoluteCoordinate(vec.y));
     }
 
-    private static int highlightCmdPos(CommandContext<FabricClientCommandSource> ctx, Color color) {
-        DefaultPosArgument positionArg = ctx.getArgument("position", DefaultPosArgument.class);
-        BlockPos position = new BlockPos(toAbsolutePos(positionArg, ctx.getSource()));
-        BlockHighlighter.getInstance().addHighlight(new Box(position), color.getPacked(), 1200);
+    private static int highlightPos(Box box, Color color) {
+        BlockHighlighter.getInstance().addHighlight(box, color.getPacked(), 1200);
         return 1;
     }
 
