@@ -1,11 +1,19 @@
 # <img src = "./icon.png"> FindCmd [![build](https://github.com/patakapata/FindCmd/actions/workflows/build.yml/badge.svg)](https://github.com/patakapata/FindCmd/actions/workflows/build.yml)
+
 付近にあるコマンドブロックを正規表現を使って検索するコマンドを追加します  
 おまけとして、特定の座標または特定の範囲(立方体)をハイライトするコマンドも追加します
 
 TIPS
+
 * findコマンドで見つかったコマンドをクリックするとそのコマンドブロックの座標をハイライトします
 
 ***
+
+## 前提
+
+| FindCmd | FabricAPI     | FabricLoader | Minecraft |
+|---------|---------------|--------------|-----------|
+| v1.0    | 0.51.1+1.18.2 | 0.14.5       | 1.18.2    |
 
 ## コマンド
 
@@ -28,6 +36,7 @@ ex. /find "tag"
 ex. /find 32 "scoreboard"
 範囲(32ブロック)内のコマンドブロックのコマンドに正規表現("scoreboard")がマッチする物を検索する
 ```
+
 * radius ... ブロック単位で検索する範囲
 * regex ... 検索に使用する正規表現(コマンド文字列に適応)
 
@@ -60,7 +69,6 @@ ex. /highlight 421 65 -7 1 0 1 0.5
 * green ... ハイライトする色の正規化された緑要素
 * blue ... ハイライトする色の正規化された青要素
 * alpha ... ハイライトする色の正規化されたアルファ要素
-
 
 ### 特定の範囲をランダムな色でハイライトする
 
