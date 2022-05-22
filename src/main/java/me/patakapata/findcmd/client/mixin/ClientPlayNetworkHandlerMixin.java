@@ -17,16 +17,6 @@ import java.util.Optional;
 
 @Mixin(ClientPlayNetworkHandler.class)
 public abstract class ClientPlayNetworkHandlerMixin implements ClientPlayPacketListener {
-
-    private static String textAsString(Text text) {
-        StringBuilder builder = new StringBuilder();
-        text.visit(asString -> {
-            builder.append(asString);
-            return Optional.empty();
-        });
-        return builder.toString();
-    }
-
     @Inject(method = "onGameMessage", at = @At("HEAD"), cancellable = true)
     private void inject_onGameMessage(GameMessageS2CPacket packet, CallbackInfo ci) {
         if (packet.getType() == MessageType.SYSTEM && RenderSystem.isOnRenderThread() && packet.getMessage() instanceof TranslatableText message) {

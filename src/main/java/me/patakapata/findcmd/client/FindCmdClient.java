@@ -14,6 +14,7 @@ import net.fabricmc.fabric.api.client.command.v1.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -59,9 +60,7 @@ public class FindCmdClient implements ClientModInitializer {
 
     public static final Identifier TEXTURE_ATLAS = new Identifier("findcmd", "textures/atlas.png");
     public static final Identifier OVERLAY_RESOURCE_ID = new Identifier(MOD_ID, "misc/overlay");
-
     public static SpriteAtlasTexture SPRITE_ATLAS;
-    public static Sprite OVERLAY_SPRITE;
 
     private static final MutableText TEMPLATE;
 
@@ -79,7 +78,7 @@ public class FindCmdClient implements ClientModInitializer {
     }
 
     public static Sprite getDedicatedOverlaySprite() {
-        return OVERLAY_SPRITE;
+        return SPRITE_ATLAS.getSprite(OVERLAY_RESOURCE_ID);
     }
 
     @SuppressWarnings("unused")
@@ -125,6 +124,10 @@ public class FindCmdClient implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STOPPING.register(BlockHighlighter.getInstance()::onClientStop);
     }
 
+    public static boolean isLoadedSodium() {
+        return FabricLoader.getInstance().getModContainer("sodium").isPresent();
+    }
+
     public static void registerTexture(TextureManager texManager, ReloadableResourceManagerImpl resManager) {
         resManager.registerReloader(new SinglePreparationResourceReloader<>() {
             @Override
@@ -138,7 +141,12 @@ public class FindCmdClient implements ClientModInitializer {
                     SPRITE_ATLAS.clear();
                 }
 
-                SPRITE_ATLAS = new SpriteAtlasTexture(TEXTURE_ATLAS);
+                SPRITE_ATLAS = new SpriteAtlasTexture(TEXTURE_ATLAS) {
+                    @Override
+                    public void tickAnimatedSprites() {
+                        super.tickAnimatedSprites();
+                    }
+                };
                 List<Identifier> sprites = List.of(OVERLAY_RESOURCE_ID);
                 SpriteAtlasTexture.Data data = SPRITE_ATLAS.stitch(resManager, sprites.stream(), profiler, 0);
 
@@ -146,8 +154,6 @@ public class FindCmdClient implements ClientModInitializer {
                 texManager.registerTexture(SPRITE_ATLAS.getId(), SPRITE_ATLAS);
                 texManager.bindTexture(SPRITE_ATLAS.getId());
                 SPRITE_ATLAS.applyTextureFilter(data);
-
-                OVERLAY_SPRITE = SPRITE_ATLAS.getSprite(OVERLAY_RESOURCE_ID);
             }
         });
     }

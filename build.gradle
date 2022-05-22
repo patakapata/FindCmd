@@ -22,11 +22,7 @@ repositories {
         }
     }
     maven {
-        name = "Modrinth"
-        url = "https://api.modrinth.com/maven"
-        content {
-            includeGroup "maven.modrinth"
-        }
+        url = "https://oss.sonatype.org/content/repositories/snapshots/"
     }
 }
 
@@ -38,6 +34,10 @@ dependencies {
 
     // Fabric API. This is technically optional, but you probably want it anyway.
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    modImplementation "maven.modrinth:modmenu:3.2.2"
+    modImplementation "maven.modrinth:sodium:mc1.18.2-0.4.1"
+    modImplementation "org.joml:joml:1.10.4"
 }
 
 processResources {

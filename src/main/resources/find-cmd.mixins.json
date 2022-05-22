@@ -6,7 +6,6 @@
   "client": [
     "ClientPlayNetworkHandlerMixin",
     "MinecraftClientMixin",
-    "ModelLoaderMixin",
     "accessor.DefaultPosArgumentAccessor",
     "accessor.LookingPosArgumentAccessor"
   ],

@@ -6,7 +6,6 @@ import net.minecraft.client.RunArgs;
 import net.minecraft.client.WindowEventHandler;
 import net.minecraft.client.texture.TextureManager;
 import net.minecraft.resource.ReloadableResourceManagerImpl;
-import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.thread.ReentrantThreadExecutor;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -18,18 +17,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(MinecraftClient.class)
 public abstract class MinecraftClientMixin extends ReentrantThreadExecutor<Runnable> implements WindowEventHandler {
     @Shadow
-    public abstract TextureManager getTextureManager();
-
-    @Shadow
     @Final
     private TextureManager textureManager;
 
     @Shadow
     @Final
     private ReloadableResourceManagerImpl resourceManager;
-
-    @Shadow
-    private Profiler profiler;
 
     public MinecraftClientMixin(String string) {
         super(string);
