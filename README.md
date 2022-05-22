@@ -1,4 +1,4 @@
-# <img src = "./icon.png"> FindCmd
+# <img src = "./icon.png"> FindCmd [![build](https://github.com/patakapata/FindCmd/actions/workflows/build.yml/badge.svg)](https://github.com/patakapata/FindCmd/actions/workflows/build.yml)
 付近にあるコマンドブロックを正規表現を使って検索するコマンドを追加します  
 おまけとして、特定の座標または特定の範囲(立方体)をハイライトするコマンドも追加します
 
