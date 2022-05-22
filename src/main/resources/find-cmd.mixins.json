@@ -5,8 +5,10 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "ClientPlayNetworkHandlerMixin",
+    "MinecraftClientMixin",
     "ModelLoaderMixin",
-    "accessor.DefaultPosArgumentAccessor"
+    "accessor.DefaultPosArgumentAccessor",
+    "accessor.LookingPosArgumentAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

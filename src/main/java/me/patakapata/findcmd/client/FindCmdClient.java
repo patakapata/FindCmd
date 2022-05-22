@@ -6,6 +6,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import me.patakapata.findcmd.client.mixin.accessor.DefaultPosArgumentAccessor;
+import me.patakapata.findcmd.client.mixin.accessor.LookingPosArgumentAccessor;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -20,22 +21,25 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.hud.ChatHud;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.texture.Sprite;
+import net.minecraft.client.texture.SpriteAtlasTexture;
+import net.minecraft.client.texture.TextureManager;
 import net.minecraft.command.argument.BlockPosArgumentType;
 import net.minecraft.command.argument.DefaultPosArgument;
+import net.minecraft.command.argument.LookingPosArgument;
+import net.minecraft.command.argument.PosArgument;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.StringNbtReader;
-import net.minecraft.screen.PlayerScreenHandler;
+import net.minecraft.resource.ReloadableResourceManagerImpl;
+import net.minecraft.resource.ResourceManager;
+import net.minecraft.resource.SinglePreparationResourceReloader;
 import net.minecraft.text.*;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec2f;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.math.*;
+import net.minecraft.util.profiler.Profiler;
 import net.minecraft.world.World;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.HashMap;
 import java.util.Iterator;
@@ -52,8 +56,12 @@ public class FindCmdClient implements ClientModInitializer {
     public static final Map<BlockPos, Pattern> queuedPos = new HashMap<>();
     public static final Logger LOGGER = LogManager.getLogger("FindCmd");
     public static final String MOD_ID = "findcmd";
-    public static final Identifier OVERLAY_TEXTURE = new Identifier(MOD_ID, "textures/misc/overlay.png");
+
+    public static final Identifier TEXTURE_ATLAS = new Identifier("findcmd", "textures/atlas.png");
     public static final Identifier OVERLAY_RESOURCE_ID = new Identifier(MOD_ID, "misc/overlay");
+
+    public static SpriteAtlasTexture SPRITE_ATLAS;
+    public static Sprite OVERLAY_SPRITE;
 
     private static final MutableText TEMPLATE;
 
@@ -70,10 +78,11 @@ public class FindCmdClient implements ClientModInitializer {
         TEMPLATE.append(body);
     }
 
-    public static Sprite getOverlaySprite() {
-        return MinecraftClient.getInstance().getSpriteAtlas(PlayerScreenHandler.BLOCK_ATLAS_TEXTURE).apply(OVERLAY_RESOURCE_ID);
+    public static Sprite getDedicatedOverlaySprite() {
+        return OVERLAY_SPRITE;
     }
 
+    @SuppressWarnings("unused")
     public static Text applyTemplate(String body) {
         return TEMPLATE.shallowCopy().append(body);
     }
@@ -116,17 +125,73 @@ public class FindCmdClient implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STOPPING.register(BlockHighlighter.getInstance()::onClientStop);
     }
 
-    public static BlockPos getBlockPos(CommandContext<FabricClientCommandSource> ctx, String name) {
-        DefaultPosArgument arg = ctx.getArgument(name, DefaultPosArgument.class);
-        return new BlockPos(toAbsolutePos(arg, ctx.getSource()));
+    public static void registerTexture(TextureManager texManager, ReloadableResourceManagerImpl resManager) {
+        resManager.registerReloader(new SinglePreparationResourceReloader<>() {
+            @Override
+            protected Object prepare(ResourceManager manager, Profiler profiler) {
+                return null;
+            }
+
+            @Override
+            protected void apply(Object prepared, ResourceManager manager, Profiler profiler) {
+                if (SPRITE_ATLAS != null) {
+                    SPRITE_ATLAS.clear();
+                }
+
+                SPRITE_ATLAS = new SpriteAtlasTexture(TEXTURE_ATLAS);
+                List<Identifier> sprites = List.of(OVERLAY_RESOURCE_ID);
+                SpriteAtlasTexture.Data data = SPRITE_ATLAS.stitch(resManager, sprites.stream(), profiler, 0);
+
+                SPRITE_ATLAS.upload(data);
+                texManager.registerTexture(SPRITE_ATLAS.getId(), SPRITE_ATLAS);
+                texManager.bindTexture(SPRITE_ATLAS.getId());
+                SPRITE_ATLAS.applyTextureFilter(data);
+
+                OVERLAY_SPRITE = SPRITE_ATLAS.getSprite(OVERLAY_RESOURCE_ID);
+            }
+        });
     }
 
-    public static Vec3d toAbsolutePos(DefaultPosArgument arg, FabricClientCommandSource src) {
+    public static BlockPos getBlockPos(CommandContext<FabricClientCommandSource> ctx, String name) {
+        PosArgument arg = ctx.getArgument(name, PosArgument.class);
+        if (arg instanceof DefaultPosArgument defaultPos) {
+            return new BlockPos(defaultPosToAbsolutePos(defaultPos, ctx.getSource()));
+        } else if (arg instanceof LookingPosArgument lookingPos) {
+            return new BlockPos(lookingPosToAbsolutePos(lookingPos, ctx.getSource()));
+        } else {
+            throw new IllegalArgumentException("Unexpected argument type: " + arg.getClass().getSimpleName());
+        }
+    }
+
+    public static Vec3d defaultPosToAbsolutePos(DefaultPosArgument arg, FabricClientCommandSource src) {
         Vec3d vec = src.getPosition();
         DefaultPosArgumentAccessor access = (DefaultPosArgumentAccessor) arg;
         return new Vec3d(access.accessor_getX().toAbsoluteCoordinate(vec.x), access.accessor_getY().toAbsoluteCoordinate(vec.y), access.accessor_getZ().toAbsoluteCoordinate(vec.z));
     }
 
+    public static Vec3d lookingPosToAbsolutePos(LookingPosArgument arg, FabricClientCommandSource src) {
+        Vec2f vec2f = src.getRotation();
+        Vec3d vec3d = src.getPosition().add(0, src.getEntity().getStandingEyeHeight(), 0);
+        LookingPosArgumentAccessor accessor = (LookingPosArgumentAccessor) arg;
+        double x = accessor.accessor_getX();
+        double y = accessor.accessor_getY();
+        double z = accessor.accessor_getZ();
+        float f = MathHelper.cos((vec2f.y + 90.0F) * 0.017453292F);
+        float g = MathHelper.sin((vec2f.y + 90.0F) * 0.017453292F);
+        float h = MathHelper.cos(-vec2f.x * 0.017453292F);
+        float i = MathHelper.sin(-vec2f.x * 0.017453292F);
+        float j = MathHelper.cos((-vec2f.x + 90.0F) * 0.017453292F);
+        float k = MathHelper.sin((-vec2f.x + 90.0F) * 0.017453292F);
+        Vec3d vec3d2 = new Vec3d(f * h, i, g * h);
+        Vec3d vec3d3 = new Vec3d(f * j, k, g * j);
+        Vec3d vec3d4 = vec3d2.crossProduct(vec3d3).multiply(-1.0D);
+        double d = vec3d2.x * z + vec3d3.x * y + vec3d4.x * x;
+        double e = vec3d2.y * z + vec3d3.y * y + vec3d4.y * x;
+        double l = vec3d2.z * z + vec3d3.z * y + vec3d4.z * x;
+        return new Vec3d(vec3d.x + d, vec3d.y + e, vec3d.z + l);
+    }
+
+    @SuppressWarnings("unused")
     public static Vec2f toAbsoluteRot(DefaultPosArgument arg, FabricClientCommandSource src) {
         Vec2f vec = src.getRotation();
         DefaultPosArgumentAccessor access = (DefaultPosArgumentAccessor) arg;
@@ -134,7 +199,7 @@ public class FindCmdClient implements ClientModInitializer {
     }
 
     private static int highlightPos(Box box, Color color) {
-        BlockHighlighter.getInstance().addHighlight(box, color.getPacked(), 1200);
+        BlockHighlighter.getInstance().addHighlight(box, color.getPacked(), 200);
         return 1;
     }
 
@@ -251,6 +316,7 @@ public class FindCmdClient implements ClientModInitializer {
         return count;
     }
 
+    @SuppressWarnings("unused")
     public static String escape(String str) {
         StringBuilder builder = new StringBuilder();
 
@@ -265,6 +331,7 @@ public class FindCmdClient implements ClientModInitializer {
         return builder.toString();
     }
 
+    @SuppressWarnings("unused")
     public static String unescape(String str) {
         StringBuilder builder = new StringBuilder();
         boolean isLastBackSlash = false;
@@ -281,33 +348,4 @@ public class FindCmdClient implements ClientModInitializer {
         return builder.toString();
     }
 
-    public static void sendResult(BlockPos pos, String msg, @Nullable String tooltip) {
-        String raw = "{\"translate\":\"[%s] %s, %s, %s > %s\",\"with\":[" + "{\"text\":\"FindCmd\",\"color\":\"gold\"}," + "{\"text\":\"%s\",\"color\":\"red\"},".formatted("%5d".formatted(pos.getX())
-                .replace(' ', '_')) + "{\"text\":\"%s\",\"color\":\"green\"},".formatted("%5d".formatted(pos.getY())
-                .replace(' ', '_')) + "{\"text\":\"%s\",\"color\":\"aqua\"},".formatted("%5d".formatted(pos.getZ()).replace(' ', '_')) + "{\"text\":\"%s\"".formatted(escape(msg));
-
-        try {
-            if (tooltip != null) {
-                Color color = Color.of(BlockHighlighter.randomColor());
-
-                raw += ",\"hoverEvent\":{\"action\":\"show_text\",\"value\":\"クリックするとこのブロックをハイライトします\n" + escape(tooltip) + "\"}";
-                raw += ",\"clickEvent\":{\"action\":\"run_command\",\"value\":\"/highlight %d %d %d %d %d %d %d\"}".formatted(
-                        pos.getX(),
-                        pos.getY(),
-                        pos.getZ(),
-                        color.getIntRed(),
-                        color.getIntGreen(),
-                        color.getIntBlue(),
-                        color.getIntAlpha()
-                );
-            }
-
-            raw += "}],\"color\":\"gray\"}";
-            Text text = Text.Serializer.fromJson(raw);
-
-            MinecraftClient.getInstance().inGameHud.getChatHud().addMessage(text);
-        } catch (Exception ex) {
-            LOGGER.error("Failed DeSerialize with:\n" + raw);
-        }
-    }
 }

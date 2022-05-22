@@ -151,17 +151,19 @@ public class BlockHighlighter {
 
         // -------------------------------------------------- //
         // テクスチャのバインド
+        Sprite sprite = FindCmdClient.getDedicatedOverlaySprite();
         glActiveTexture(GL_TEXTURE0);
         RenderSystem.disableTexture();
-        RenderSystem.bindTexture(FindCmdClient.getOverlaySprite().getAtlas().getGlId());
+        RenderSystem.bindTexture(sprite.getAtlas().getGlId());
         glUniform1i(glGetUniformLocation(program, "Sampler0"), 0);
 
         if (entryChanged) {
             // 再構成
             entryChanged = false;
             LOGGER.debug("バッファー再構成中…");
-            UV base = new UV(FindCmdClient.getOverlaySprite()).scale(1, 0.5f);
+            UV base = new UV(sprite).scale(1, 0.5f);
             UV overlay = base.clone().move(0, 1);
+            UV full = new UV(0, 0, 1, 1);
             buffer.clear();
             int i = 0;
             int size = highlightEntries.size();
